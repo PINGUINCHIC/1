@@ -1,0 +1,324 @@
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import numpy as np
+from math import *
+import csv
+from matplotlib import cm
+import matplotlib.patches as patches
+from matplotlib.pylab import figure, subplot2grid
+from matplotlib.colors import ListedColormap
+import pandas as pd
+from scipy.optimize import root_scalar
+from scipy.integrate import ode
+rc = {"font.family" : "serif", 
+      "mathtext.fontset" : "stix"}
+plt.rcParams.update(rc)
+plt.rcParams["font.serif"] = ["Times New Roman"] + plt.rcParams["font.serif"]
+def b(z):
+    global R, r, beta, teta
+    b = R * (sin(beta)/sin(teta)) - (r + z) * (1/tan(teta))
+    return b
+
+def alpha2(z):
+    global beta, R, r
+    a = beta + asin((R/(r + z))*sin(beta))
+    return a
+
+def da3(z):
+    global R, r, D
+    da3 = pi - acos((R**2 + (r + z)**2 - (D/2)**2)/(2 * R * (r + z)))
+    return da3
+
+def alpha3(z):
+    a = alpha2(z) - da3(z)
+    return a
+
+def perim(z):
+    global z1, z2, z3, alpha_1, n, r
+    if z >= 0 and z <= z1:
+        P = 2 * n * (alpha_1 * (r + z) + b(z))
+    if z > z1 and z <= z2:
+        P = 2 * n * alpha2(z) * (r + z)
+    if z > z2 and z <= z3:
+        P = 2 * n * alpha3(z) * (r + z)
+    return P
+
+def db3(z):
+    global R, D, r
+    b = acos((R**2 + (D/2)**2 - (r + z)**2)/(R*D))
+    return b
+
+def Fsv(z):
+    global z1, z2, z3, alpha_1, n, r, D, R
+    if z >= 0 and z <= z1:
+        F = n*(alpha_1*(r + z)**2 + (R*(sin(beta)/sin(teta))-(r + z)*(1/tan(teta)))*((r+z)+R*cos(alpha_1))+R*(r+z)*sin(alpha_1))
+    if z > z1 and z <= z2:
+        F = n*(alpha2(z)*(r + z)**2 + R*(r+z)*sin(alpha2(z)))
+    if z > z2 and z <= z3:
+        F = n*(alpha3(z)*(r + z)**2 + R*(r+z)*sin(alpha2(z)) + db3(z)*((D**2)/4) - R*(D/2)*sin(db3(z)))
+    return F
+
+def x_p(z):
+    global l
+    x = (l * perim(z))/Fsv(z)
+    return x
+
+def epsf(D):
+    eps = 1 - (4 * Fsv(0))/(pi * D**2)
+    return eps
+
+def epsdegr(D):
+    global z0
+    eps = (1/epsf(D))*(1 - (4 * Fsv(z0))/(pi * D**2))
+    return eps
+
+def Sgr(z):
+    global l
+    S = perim(z) * l
+    return S
+
+def A1(k):
+    A1 = (k*(2/(k+1))**((k+1)/(k-1)))**(1/2)
+    return A1
+
+def Hign(z_ign):
+    global z_ign0
+    if z_ign0 - z_ign >= 0:
+        return 1
+    else:
+        return 0
+
+def Hq(etta_t):
+    global etta_ts
+    if etta_ts - etta_t >= 0:
+        return 1
+    else:
+        return 0
+
+def Hpr(z, etta_t):
+    global etta_ts, z_e
+    if (z_e - z >= 0) and (etta_t - etta_ts >= 0):
+        return 1
+    else:
+        return 0
+
+def phi_t(T_gr0):
+    global D_t, T_ref
+    phi_t = exp(D_t * (T_gr0 - T_ref))
+    return phi_t
+
+def phi_x(x):
+    global A, x_nop
+    phi_x = 1 + A * (x - x_nop)
+    if phi_x >= 1:
+        return phi_x
+    else:
+        return 1
+
+def Sign1(z_ign):
+    global d_0, c_0, z_ign0
+    d = d_0 - 2 * z_ign
+    h_0 = z_ign0 - c_0/2
+    R_0 = (d_0/(4 * h_0)) + h_0/2
+    R = R_0 - z_ign
+    h = R - (R**2 - (d/2)**2)**(1/2)
+    c = 2 * (z_ign0 - z_ign - h)
+    if c > 0:
+        S_cyl = pi * d * c
+        S_bok = pi * ((d/2)**2 + h**2)
+        Sign1 = S_cyl + 2 * S_bok
+    else:
+        h = R - (R_0 - z_ign)
+        d = 2 * h * (2 * R - h)
+        S_bok = pi * ((d/2)**2 + h**2)
+        Sign1 = 2 * S_bok
+    return Sign1
+
+def Sign(z_ign):
+    global omega_ign, omega_ign1
+    Sign = omega_ign/omega_ign1 * Sign1(z_ign)
+    return Sign
+
+def Wign1(z_ign):
+    global d_0, c_0, z_ign0
+    d = d_0 - 2 * z_ign
+    h_0 = z_ign0 - c_0/2
+    R_0 = (d_0/(4 * h_0)) + h_0/2
+    R = R_0 - z_ign
+    h = R - (R**2 - (d/2)**2)**(1/2)
+    c = 2 * (z_ign0 - z_ign - h)
+    W_cyl = pi * (d**2)/4 * c
+    W_bok = (1/6) * pi * h * (h**2 + 3 * (d/2)**2)
+    Wign1 = W_cyl + 2 * W_bok
+    return Wign1
+Q = 6140604.447
+Q_ign = 3478172.507
+R_g_pr = 477.906
+R_g_ign = 317.466
+eps_pr = 0.303502
+eps_ign = 0.556341
+C_p_pr = 1922
+C_pr = 1250
+n_cr = 1.14777
+n_cr_ign = 1.1043
+C_p_ign = 1367.561
+T_p_ign = 2543.34
+lambda_pr = 0.3
+lambda_g_pr = 0.446296
+lambda_ign = 0.0871029
+delta = 1686
+delta_ign = 1850
+z0 = 112/1000
+D = 0.496
+omega = 1103.7
+n = 7
+teta = 0.6
+r_otn = 0.1
+R = ((D/2) - z0)/(r_otn + 1)
+r = r_otn * R
+beta = pi/n
+alpha_1 = pi/2 + beta - teta
+z1 = 0.053
+z2 = z0
+z3 = 0.134
+F = pi * (D**2)/4
+t = 12.5
+u_1 = 5.56/1000
+v = 0.304
+k = 1.21
+A_1 = 0.638
+hi_t = 0.98
+hi_c = 1.436
+T_ref = 20 + 273.15
+D_t = 0.0017
+A = 0.003
+x_nop = 100
+Pr_ign = 0.637266
+Pr_pr = 0.452217
+mu_ign = 0.0000619
+mu_pr = 0.0000892
+D_t_ign = 0.0028
+eps_f = 0.8507
+eps_w = eps_f
+eps_degr = 0.07553
+l = 4.043
+
+S_0 = Sgr(0)
+u = z0/t
+p_not = (u/u_1)**(1/v)
+p_not = p_not * 1000000
+W_0 = (pi * ((D)**3)/12) + (F * l * (1 - eps_w))
+omega_ign = 0.5 * ((p_not * W_0)/(R_g_ign * T_p_ign)) * (1/(1 - eps_ign)) #Первое приближение, дальше подбираем
+omega_ign = 1
+
+
+z_ign0 = 0.5/1000
+d_0 = 5 * z_ign0
+c_0 = 0.8 * z_ign0
+z = np.linspace(0, z3, 10000)
+Sg = np.array([])
+for j in range(len(z[z <= z2])):
+    Sg = np.append(Sg, Sgr(z[j]))
+S_avg = np.sum(Sg)/len(Sg)
+omega_ign1 = delta_ign * Wign1(0)
+F_cr = (S_avg * u * delta * ((k - 1)/k * hi_t * Q)**(1/2))/(A_1 * p_not * hi_c)
+T_gr0 = -50 + 273.15 
+etta_ts = (750 - T_gr0)**2
+z_e = z3
+S_gr0 = Sgr(0)
+S_w = 2.5 * F
+d_eff = (4 * F * (1 - eps_f) * l)/(S_gr0)
+def syst(t, Y):
+    global R_g_pr, R_g_ign, C_p_pr, C_p_ign, lambda_ign, lambda_pr, l, F, d_eff, eps_pr, eps_ign, eps_f, T_gr0, T_ref, u_1, v, F, lambda_g_pr, delta, delta_ign, F_cr, eps_f, n_cr, n_cr_ign, Pr_pr, Pr_ign, mu_ign, mu_pr, D
+    p = Y[0]
+    W = Y[1]
+    z = Y[2]
+    z_ign = Y[3]
+    m_pr = Y[4]
+    m_ign = Y[5]
+    etta_t = Y[6]
+    
+    R_g = (m_pr * R_g_pr + m_ign * R_g_ign)/(m_pr + m_ign)
+    T_g = (p * W)/((m_pr + m_ign) * R_g)
+    C_p = (m_pr * C_p_pr + m_ign * C_p_ign)/(m_pr + m_ign)
+    k = C_p/(C_p - R_g)
+    eps = (m_pr * eps_pr + m_ign * eps_ign)/(m_pr + m_ign)
+    
+    u_pr = u_1 * ((p/1000000)**v) * phi_t(T_gr0) * phi_x(x_p(z))
+    u_ign = (16.9/1000) * ((p/10**6)**0.22) * exp(D_t_ign * (T_gr0 - T_ref))
+    
+    H_q = Hq(etta_t)
+    #H_q = 0
+    #H_pr = 0
+    H_pr = Hpr(z, etta_t)
+    H_ign = Hign(z_ign)
+    
+    G_pr = u_pr * delta * Sgr(z)
+    G_ign = u_ign * delta_ign * Sign(z_ign)
+    A_1 = A1(n_cr_ign) * H_q + A1(n_cr) * (1 - H_q)
+    G_g = (A_1 * p * F_cr)/((R_g * T_g)**(1/2))
+    
+    Re = (4 * G_ign * (1 - eps_ign))/(pi * d_eff * mu_ign)
+    Nu = 0.023 * (Re**0.8) * (Pr_ign**0.4)
+    q_gr = Nu * (lambda_ign/d_eff) * (T_g - (etta_t)**(1/2) - T_gr0)
+    
+    Re = (4 * G_g)/(pi * D * mu_pr)
+    Nu = 0.023 * (Re**0.8) * (Pr_pr**0.4)
+    q_w = 0.7 * Nu * (lambda_g_pr/D) * T_g
+    
+    dW = G_pr/delta * H_pr + G_ign/delta_ign * H_ign
+    dp = ((k-1)/W)*(Q*G_pr*H_pr+Q_ign*G_ign*H_ign-q_gr*S_gr0*H_q-q_w*S_w-C_p*T_g*(G_g/(1-eps))-((k*p)/(k-1))*dW)
+    dz = u_pr * H_pr
+    dz_ign = u_ign * H_ign
+    dm_pr = (1-eps_pr) * G_pr * H_pr - (m_pr/(m_pr + m_ign)) * G_g
+    dm_ign = (1-eps_ign) * G_ign * H_ign - (m_ign/(m_pr + m_ign)) * G_g
+    detta_t = ((2 * q_gr**2)/(C_pr * lambda_pr * delta)) #* H_q
+    #print(dp, dW, dz, dz_ign, dm_pr, dm_ign, detta_t)
+    return np.array([dp,
+                     dW,
+                     dz,
+                     dz_ign,
+                     dm_pr,
+                     dm_ign,
+                     detta_t
+                    ])
+                    Y_0 = np.array([100000,
+                W_0,
+                0,
+                0,
+                0,
+                (100000 * W_0)/(R_g_ign * T_gr0),
+                0
+               ])
+ sol = ode(syst)
+ t = np.array([0])
+p = np.array([100000])
+m_pr = np.array([0])
+m_ign = np.array([0])
+z_pr = np.array([0])
+z_ign = np.array([0])
+dt = 1e-5
+while sol.successful() and sol.y[2] <= z3:
+    if t[-1] > 0.5:
+        dt = 1e-3
+    sol.integrate(sol.t + dt)
+    t = np.append(t, sol.t)
+    p = np.append(p, sol.y[0])
+    z_pr = np.append(z_pr, sol.y[2])
+    z_ign = np.append(z_ign, sol.y[3])
+    m_pr = np.append(m_pr, sol.y[4])
+    m_ign = np.append(m_ign, sol.y[5])
+    if (t[-1] > 2) and (p[-1] <= 200000):
+        break
+ fig = plt.figure(num = 0, figsize = (6, 4), dpi=120)
+ax = plt.axes()
+plt.plot(t_50, p_50/1000000, label = '$p (T_0 = -50{\degree}C)$')
+plt.plot(t50, p50/1000000, label = '$p (T_0 =+50{\degree}C)$')
+plt.plot(t20, p20/1000000, label = '$p (T_0 = +20{\degree}C)$')
+p_cp = np.sum(p)/len(p)
+plt.plot([t[0], 18], [p_not/1000000, p_not/1000000], label = '$p_н$')
+plt.legend(fontsize = 10)
+ax.set_ylim([-0.5, 11]) # Подобрать так, чтобы легенда красиво располагалась на графике
+plt.xlabel('$t$, с', fontsize = 12)
+plt.ylabel('$p$, МПа', fontsize = 12)
+plt.grid()
