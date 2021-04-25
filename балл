@@ -1,0 +1,214 @@
+from pyballistics import get_options_agard, get_options_sample, ozvb_lagrange, get_db_powder, get_powder_names
+import numpy as np
+import math
+from scipy.optimize import minimize
+import copy
+from scipy.optimize import Bounds, OptimizeResult
+from tqdm import tqdm
+import pandas as pd
+d = 100/1e3       
+q =  4.35         
+v_pm =  1600      
+n_s =    1        
+p_m_max = 450*1e6   
+l_m_max_d =  60    
+nu_e = 0.9
+T = -50
+p_mm_50_max = 170*1e6  # в Па
+p_fors = 15*1e6   
+n_cell = 300 
+norm_ro = 1000 
+norm_w = 1
+s = n_s*math.pi*d**2/4
+initial_dict =  {
+   'powders': 
+    [
+       {'omega': 0, 'dbname': 'упаывав'}
+    ],
+  'init_conditions': 
+    {
+       'q': q,
+       'd': d,
+       'W_0': 0 ,
+       'phi_1': 1,
+       'p_0': p_fors, 
+       'n_S': n_s
+    },
+  'igniter': 
+    {
+       'p_ign_0': 1000000.0  #давление вспышки
+    },
+  
+  'meta_lagrange': 
+    {
+       'CFL': 0.9, 
+       'n_cells': n_cell #300
+    },
+  'stop_conditions': 
+    {
+       'v_p': v_pm, 
+       'x_p': d*l_m_max_d,
+       'steps_max': 8000,   
+       't_max': 0.05,
+       'p_max': p_m_max*2.5
+    }
+ }
+ def get_nu (res):
+    l = res['layers'][-1]['x'][-1]
+    psi = 0
+    i = 0
+    while psi < 1 and i < len(res['layers']):
+        x = res['layers'][i]['x'][-1]
+        psi = res['layers'][i]['psi_1'].mean()
+        i+=1
+
+    return x/l
+    
+def get_p_maen (lay):
+    arr_x = lay['x']
+    arr_p = lay['p']
+    h = arr_x[1:]-arr_x[:-1]
+    l = np.sum(h)
+    pm = np.sum(h*arr_p)/l
+    return pm
+
+
+def GRude (x, name = 'jdkijs'):
+    
+    a = np.array([1e-2, 1e-7, 1, 1e-7, 1])
+    v = np.array([1, 0.85, 0.7, 0.5, 0.6])
+    ro, wq = x[0]*norm_ro, x[1]
+    w = q*wq
+    init = copy.deepcopy(initial_dict)
+    init['powders'][0]['omega'] = w
+    init['powders'][0]['dbname'] = name
+    init['init_conditions']['W_0'] = w/ro
+    res = ozvb_lagrange(init)
+    
+    if res['stop_reason'] == 'error':
+            return 2e10  
+        
+    W_pm = res['layers'][-1]['x'][-1]*s + w/ro 
+
+    init_1 = copy.deepcopy(init)
+    init_1['init_conditions']['T_0'] = 273.15 + T
+    init_1['stop_conditions']['x_p'] = res['layers'][-1]['x'][-1]
+    res_1 =  ozvb_lagrange(init_1)
+    
+    if res_1['stop_reason'] == 'error':
+            return 1e10  
+    
+    del_v = np.abs(v_pm - res['layers'][-1]['u'][-1])
+    del_p = (np.array([ get_p_maen(layr) for layr in res['layers']]).max() - p_m_max)
+    del_x = (res['layers'][-1]['x'][-1] - l_m_max_d*d)
+    del_p_50 = (get_p_maen(res_1['layers'][-1]) - p_mm_50_max)
+    del_psi = (get_nu(res) - nu_e)
+    
+    hevi = np.heaviside([del_v, del_p, del_x, del_p_50, del_psi],0)
+    del_ar = np.abs(np.array([del_v, del_p, del_x, del_p_50, del_psi])) 
+    
+    return W_pm*100 + np.sum(1e4*(a*del_ar**v)*hevi)
+
+def CheckSolve (solv):
+    
+    if solv['stop_reason'] == 'error':
+        return False
+    elif (np.array([ get_p_maen(layr) for layr in solv['layers']]).max() <= p_m_max) & (solv['stop_reason'] == 'v_p') & (get_nu(solv) <= nu_e) :
+        return True
+    else:
+        return False
+        
+def CheckSolv_dop (solv):
+    
+    if solv['stop_reason'] == 'error':
+        return False
+    elif get_p_maen(solv['layers'][-1]) <= p_mm_50_max:
+        return True
+    else:
+        return False 
+
+def GetSolve (w,ro, name, get_table_data = False):
+        init_dict0 = copy.deepcopy(initial_dict)
+        init_dict0['powders'][0]['dbname'] = name
+        init_dict0['powders'][0]['omega'] = w
+        init_dict0['init_conditions']['W_0'] = w/ro
+        res = ozvb_lagrange(init_dict0)
+        
+        if res['stop_reason'] == 'error' and get_table_data:
+            print (res['error_message'])
+            return [w/q, ro, np.NaN, 'error','not']
+        elif res['stop_reason'] == 'error':
+            print (res['error_message'])
+            return 'error'
+
+        res_chek = CheckSolve(res)
+        W_pm = res['layers'][-1]['x'][-1]*s + w/ro
+        
+        if res_chek:
+            init_1 = copy.deepcopy(init_dict0)
+            init_1['init_conditions']['T_0'] = 273.15 + T
+            init_1['stop_conditions']['x_p'] = res['layers'][-1]['x'][-1]
+            init_1['stop_conditions']['v_p'] = v_pm*1.5
+            res_1 =  ozvb_lagrange(init_1)
+            res_1_check = CheckSolv_dop(res_1)
+            if res_1['stop_reason'] == 'x_p':
+                if  res_1_check:
+                    if get_table_data:
+                        return [w/q, ro, W_pm, 'solve','dop']
+                    else:
+                        return W_pm
+                elif get_table_data:
+                    return [w/q, ro, W_pm, 'solve','osn']
+                else: 
+                    return 0 
+                    
+            elif get_table_data:
+                return [w/q, ro, W_pm, res['stop_reason'],'osn']
+            else:
+                return 0
+        elif get_table_data:
+            return [w/q, ro, np.NaN, res['stop_reason'],'not']
+        else:
+            return 0
+RES = []
+Solution = []
+names = get_powder_names() 
+for name in tqdm(names):
+    #try:
+        x0 = np.array([(np.random.random()*800+100)/norm_ro, np.random.random()*0.6+0.1])
+        res  = minimize(GRude, x0, args=name, method='nelder-mead',options={'xtol': 1e-4, 'disp': False, 'return_all': True})  
+    #except Exception:
+        #print(Exception.with_traceback())
+        #RES.append(['error'])
+        #Solution.append(['error'])
+    #else:
+        RES.append(res)
+        Solution.append(OptimizeResult(res))
+        solv = copy.deepcopy(Solution)
+rows = []
+i = 0
+names = get_powder_names()
+#names = list_powder_name
+for sol in solv:
+    if sol == ['error']:
+        rows.append ({
+            'name':names[i],
+            'ro': np.NaN,
+            'wq': np.NaN,
+            'fun': np.NaN,
+            'success': False,
+            'W_pm':  np.NaN,
+            'check': False
+        })
+    else:   
+        W_pm = GetSolve(sol.x[1]*q, sol.x[0]*norm_ro, names[i])
+        rows.append ({
+            'name':names[i],
+            'ro':sol.x[0]*norm_ro,
+            'wq':sol.x[1],
+            'fun':sol.fun,
+            'success':sol.success,
+            'W_pm': W_pm,
+            'check': np.abs(W_pm*100 - sol.fun) < 1e-6
+        })
+    i+=1
